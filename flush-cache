@@ -1,0 +1,298 @@
+#!/usr/bin/env bash
+# flush-cache: Create and read large random data to flush system cache
+# Usage:
+#   flush-cache --build-data <path>
+#   flush-cache --flush [-n <num>] <path>
+#   flush-cache --data <path>
+#
+# Options:
+#   --build-data <path>   Create ~2TB of random data in <path> (100x10MB, 100x100MB, 100x1GB, 194x10GB)
+#   --flush <path>        Read all data in <path> n times (default n=5)
+#   --data <path>         Show storage metrics for <path>
+#   -n <num>              Number of times to read data (default 5)
+#
+# Requirements: GNU parallel, dd, stat, find, awk, seq
+
+set -e
+
+format_duration() {
+    local secs=$1
+    if [ "$secs" -ge 3600 ]; then
+        printf "%dh%02dm%02ds" $((secs/3600)) $((secs%3600/60)) $((secs%60))
+    elif [ "$secs" -ge 60 ]; then
+        printf "%dm%02ds" $((secs/60)) $((secs%60))
+    else
+        printf "%ds" "$secs"
+    fi
+}
+
+show_progress() {
+    local current=$1
+    local total=$2
+    local msg=$3
+    local start_time=$4
+    local width=30
+    local percent=$(( 100 * current / total ))
+    local filled=$(( width * current / total ))
+    local empty=$(( width - filled ))
+    local now
+    now=$(date +%s)
+    local elapsed=$(( now - start_time ))
+    local eta_str=""
+    if [ "$current" -gt 0 ] && [ "$elapsed" -gt 0 ]; then
+        local remaining=$(( elapsed * (total - current) / current ))
+        eta_str=" ETA $(format_duration $remaining)"
+    fi
+    printf "\r%s [" "$msg"
+    [ "$filled" -gt 0 ] && printf "#%.0s" $(seq 1 $filled)
+    [ "$empty" -gt 0 ] && printf -- "-%.0s" $(seq 1 $empty)
+    printf "] %d%% (%d/%d) %s%s" "$percent" "$current" "$total" "$(format_duration $elapsed)" "$eta_str"
+    printf "%-10s" ""
+    if [ "$current" -eq "$total" ]; then
+        printf "\n"
+    fi
+}
+
+create_if_missing() {
+    local file="$1"
+    local expected_size="$2"
+    local bs="$3"
+    local count="$4"
+    if [ -f "$file" ]; then
+        local actual_size
+        actual_size=$(stat --format '%s' "$file")
+        if [ "$actual_size" -eq "$expected_size" ]; then
+            return 0
+        fi
+        echo "WARNING: $file exists but size $actual_size != expected $expected_size, recreating"
+    fi
+    # Generate pseudo-random data in 64MB chunks (openssl rand is limited to 32-bit int)
+    local chunk_size=$((64*1024*1024))
+    local remaining="$expected_size"
+    : > "$file"
+    while [ "$remaining" -gt 0 ]; do
+        local this_chunk="$chunk_size"
+        [ "$remaining" -lt "$chunk_size" ] && this_chunk="$remaining"
+        openssl rand "$this_chunk" >> "$file"
+        remaining=$((remaining - this_chunk))
+    done
+}
+
+build_data() {
+    local path="$1"
+    mkdir -p "$path"
+    export -f create_if_missing
+    echo "Creating flag file: flag_10MB.bin (10MB)..."
+    create_if_missing "$path/flag_10MB.bin" 10485760 10M 1
+    echo "Creating flag file: flag_100MB.bin (100MB)..."
+    create_if_missing "$path/flag_100MB.bin" 104857600 100M 1
+    echo "Creating flag file: flag_1GB.bin (1GB)..."
+    create_if_missing "$path/flag_1GB.bin" 1073741824 8M 128
+    echo "Creating flag file: flag_10GB.bin (10GB)..."
+    create_if_missing "$path/flag_10GB.bin" 10737418240 8M 1280
+    echo "Creating 100 files of 10MB..."
+    seq 1 100 | parallel -j8 --bar "create_if_missing $path/file10MB_{}.bin 10485760 10M 1"
+    echo "Creating 100 files of 100MB..."
+    seq 1 100 | parallel -j8 --bar "create_if_missing $path/file100MB_{}.bin 104857600 100M 1"
+    echo "Creating 100 files of 1GB..."
+    seq 1 100 | parallel -j8 --bar "create_if_missing $path/file1GB_{}.bin 1073741824 8M 128"
+    echo "Creating 194 files of 10GB..."
+    seq 1 194 | parallel -j8 --bar "create_if_missing $path/file10GB_{}.bin 10737418240 8M 1280"
+    echo "Data creation complete."
+}
+
+measure_flag_files() {
+    local path="$1"
+    local label="$2"
+    echo "$label"
+    for flag in "$path/flag_10MB.bin" "$path/flag_100MB.bin" "$path/flag_1GB.bin" "$path/flag_10GB.bin"; do
+        [ -f "$flag" ] || continue
+        local name
+        name=$(basename "$flag")
+        local size
+        size=$(stat --format '%s' "$flag")
+        local start end elapsed_ns gb secs speed
+        start=$(date +%s%N)
+        dd if="$flag" of=/dev/null bs=8M status=none
+        end=$(date +%s%N)
+        elapsed_ns=$(( end - start ))
+        gb=$(awk "BEGIN {printf \"%.4f\", $size / 1024/1024/1024}")
+        secs=$(awk "BEGIN {printf \"%.6f\", $elapsed_ns / 1000000000}")
+        speed=$(awk "BEGIN {printf \"%.2f\", $gb / $secs}")
+        printf "  %-20s %s GB/s\n" "$name" "$speed"
+    done
+}
+
+read_and_time() {
+    local file="$1"
+    local size
+    size=$(stat --format '%s' "$file")
+    local start
+    start=$(date +%s%N)
+    dd if="$file" of=/dev/null bs=8M status=none
+    local end
+    end=$(date +%s%N)
+    local elapsed_ns=$(( end - start ))
+    # output: size_bytes elapsed_ns
+    echo "$size $elapsed_ns"
+}
+
+flush_data() {
+    local path="$1"
+    local n="$2"
+    local logdir
+    logdir=$(mktemp -d)
+    export -f read_and_time
+
+    # Warm flag files into cache, then measure "before" speed
+    echo "Warming flag files into cache..."
+    for flag in "$path"/flag_*.bin; do
+        [ -f "$flag" ] && dd if="$flag" of=/dev/null bs=8M status=none
+    done
+    echo ""
+    measure_flag_files "$path" "=== Flag files BEFORE flush (cached) ==="
+
+    local total_start
+    total_start=$(date +%s)
+
+    echo ""
+    for round in $(seq 1 "$n"); do
+        echo "Flush round $round/$n"
+        find "$path" -type f -not -name 'flag_*' | parallel -j16 --bar "read_and_time {}" >> "$logdir/round_${round}.log"
+    done
+
+    local total_end
+    total_end=$(date +%s)
+    local total_elapsed=$(( total_end - total_start ))
+
+    # Measure flag files after flush
+    echo ""
+    measure_flag_files "$path" "=== Flag files AFTER flush (cache evicted) ==="
+
+    echo ""
+    echo "=== Flush Summary ==="
+    echo "Rounds: $n"
+    echo "Wall time: $(format_duration $total_elapsed)"
+
+    # Aggregate metrics from all rounds
+    awk '
+    {
+        size_bytes = $1
+        elapsed_ns = $2
+        if (size_bytes < 50*1024*1024) {
+            cat = "10MB"
+        } else if (size_bytes < 500*1024*1024) {
+            cat = "100MB"
+        } else if (size_bytes < 5*1024*1024*1024) {
+            cat = "1GB"
+        } else {
+            cat = "10GB"
+        }
+        count[cat]++
+        total_bytes[cat] += size_bytes
+        total_ns[cat] += elapsed_ns
+        grand_bytes += size_bytes
+        grand_ns += elapsed_ns
+    }
+    END {
+        printf "\n%-8s %12s\n", "Size", "Avg speed"
+        printf "%-8s %12s\n", "----", "---------"
+        order[1]="10MB"; order[2]="100MB"; order[3]="1GB"; order[4]="10GB"
+        for (i=1; i<=4; i++) {
+            c = order[i]
+            if (count[c] > 0) {
+                gb = total_bytes[c] / 1024/1024/1024
+                secs = total_ns[c] / 1000000000
+                speed = (secs > 0) ? gb / secs : 0
+                printf "%-8s %8.2f GB/s\n", c, speed
+            }
+        }
+        grand_gb = grand_bytes / 1024/1024/1024
+        grand_secs = grand_ns / 1000000000
+        grand_speed = (grand_secs > 0) ? grand_gb / grand_secs : 0
+        printf "%-8s %12s\n", "----", "---------"
+        printf "%-8s %8.2f GB/s\n", "Total", grand_speed
+    }
+    ' "$logdir"/round_*.log
+
+    # Total data and wall-clock speed
+    local total_data_gb
+    total_data_gb=$(awk '{s+=$1} END {printf "%.2f", s/1024/1024/1024}' "$logdir"/round_*.log)
+    if [ "$total_elapsed" -gt 0 ]; then
+        echo ""
+        echo "Total data read: ${total_data_gb} GB across $n rounds"
+        echo "Wall-clock speed: $(awk "BEGIN {printf \"%.2f\", $total_data_gb / $total_elapsed}") GB/s (16 parallel readers)"
+    fi
+
+    rm -rf "$logdir"
+    echo ""
+}
+
+metrics() {
+    local path="$1"
+    echo "=== Storage Metrics for $path ==="
+    find "$path" -type f -exec stat --format '%n %s' {} + | awk '
+    {
+        size_bytes = $2
+        if (size_bytes < 50*1024*1024) cat = "10MB"
+        else if (size_bytes < 500*1024*1024) cat = "100MB"
+        else if (size_bytes < 5*1024*1024*1024) cat = "1GB"
+        else cat = "10GB"
+        count[cat]++
+        total[cat] += size_bytes
+        grand += size_bytes
+    }
+    END {
+        printf "%-8s %8s %12s\n", "Size", "Files", "Total"
+        printf "%-8s %8s %12s\n", "----", "-----", "-----"
+        order[1]="10MB"; order[2]="100MB"; order[3]="1GB"; order[4]="10GB"
+        for (i=1; i<=4; i++) {
+            c = order[i]
+            if (count[c] > 0)
+                printf "%-8s %8d %10.2f GB\n", c, count[c], total[c]/1024/1024/1024
+        }
+        printf "%-8s %8s %12s\n", "----", "-----", "-----"
+        grand_count = 0; for (c in count) grand_count += count[c]
+        printf "%-8s %8d %10.2f GB\n", "Total", grand_count, grand/1024/1024/1024
+    }'
+}
+
+usage() {
+    grep '^#' "$0" | cut -c 3-
+    exit 1
+}
+
+main() {
+    local build_path=""
+    local flush_path=""
+    local data_path=""
+    local n=5
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --build-data)
+                build_path="$2"; shift 2;;
+            --flush)
+                flush_path="$2"; shift 2;;
+            --data)
+                data_path="$2"; shift 2;;
+            -n)
+                n="$2"; shift 2;;
+            -h|--help)
+                usage;;
+            *)
+                usage;;
+        esac
+    done
+    if [ -n "$build_path" ]; then
+        build_data "$build_path"
+        metrics "$build_path"
+    elif [ -n "$flush_path" ]; then
+        flush_data "$flush_path" "$n"
+    elif [ -n "$data_path" ]; then
+        metrics "$data_path"
+    else
+        usage
+    fi
+}
+
+main "$@"

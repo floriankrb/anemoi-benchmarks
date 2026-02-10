@@ -1,14 +1,6 @@
 # Zarr Read Speed Benchmark
 
-Compares **Zarr 2** vs **Zarr 3** read performance for anemoi-datasets on ECMWF HPC storage.
-
-## Caveats
-
-The raw Zarr read speeds (threads and processes modes) are useful for identifying bottlenecks, but they are **not the metric we ultimately care about**. What matters is actual training speed, which depends on many additional factors. A lower read throughput may be perfectly acceptable if training performance is good.
-
-The PyTorch DataLoader runs are an attempt to get closer to realistic training conditions, but they are still synthetic benchmarks — no actual model is being trained.
-
-The true performance metrics come from full HPC training benchmarks, which look at deeper indicators such as disk usage, I/O patterns at the filesystem level, and overall resource consumption. In a shared HPC environment, throughput depends on how many users are concurrently accessing the storage and network. Higher read speed is only beneficial if it does not come at disproportionate resource cost — e.g. achieving 2x speed while consuming 4x the shared resources is a net loss for the system.
+Compares **Zarr 2** vs **Zarr 3** read performance for anemoi-datasets on ECMWF HPC storage to read existing anemoi zarr 2 datasets.
 
 ## Experiment Setup
 
@@ -16,56 +8,56 @@ The true performance metrics come from full HPC training benchmarks, which look 
 
 | Mode | Implementation | Notes |
 |------|----------------|-------|
-| **threads** | `ThreadPoolExecutor` | Subject to GIL contention |
-| **processes** | `ProcessPoolExecutor` | True parallel execution |
-| **torch** | PyTorch DataLoader + DDP | Realistic ML training scenario |
-| **anemoi** | PyTorch DataLoader + DDP + anemoi-training | Actual ML training (not implemented here) |
+| **threads** | `ThreadPoolExecutor` | Using multiple threads |
+| **processes** | `ProcessPoolExecutor` | Using multiple processes |
 
 ### Key Parameters
 
 - `n=16`: Number of random samples to read (16 samples per worker provides statistical significance)
-- Sample length `ds[i:i+4]` : Consecutive dates per sample
+- Sample length `ds[i:i+4]` : Consecutive dates per sample. Datasets chunking is 1 (1 chunk per index) in the first dimension and None in the other dimension (all indexes in the same chunk).
 - **`workers 1 2 4 8 16`**: Worker counts to test scaling
 
 ### Heat Tracking
 
 To benchmark **cold data** (not cached), the suite tracks previously-read indices in `data_heat/*.jsonl` and advances sequentially through the dataset. This prevents inflated throughput from cached reads.
 
+## Caveats
+
+The raw Zarr read speeds (threads and processes modes) are useful for identifying bottlenecks, but they are **not the metric we ultimately care about**. What matters is actual training speed, which depends on many additional factors. A lower read throughput may be perfectly acceptable if training performance is good.
+
+The true performance metrics come from full training benchmarks, which look at deeper indicators such as disk usage, I/O patterns at the filesystem level, and overall resource consumption.
+
+
 ## Results
 
-### O96 Resolution - HPC Networked Storage
+### O96 — Threads vs Processes (SSD)
 
-![O96 HPC Results](o96-hpc.png)
+![O96 SSD Threads vs Processes](o96-ssd-threads-processes.png)
 
-- Processes mode achieves ~1.5 GB/s at 16 workers
-- Torch DataLoader throughput lower (~0.5-0.6 GB/s) due to overhead
-- Zarr 2 and Zarr 3 show comparable performance
+- Zarr 2 threads scale best, reaching ~1.5 GB/s at 8–16 workers
+- Zarr 2 processes reach ~1.4 GB/s at 8 workers, slightly below threads
+- Zarr 3 plateaus at ~1.2 GB/s for both threads and processes, showing no benefit from additional workers beyond 2
+- At 1 worker, Zarr 3 starts slightly ahead of Zarr 2 processes (~1.0 vs ~0.75 GB/s), but Zarr 2 overtakes as workers increase
 
-### O96 Resolution - SSD Storage
+### N320 — Threads vs Processes (SSD)
 
-![O96 SSD Results](o96-ssd.png)
+![N320 SSD Threads vs Processes](n320-ssd-threads-processes.png)
 
-- **3-4x higher throughput** than HPC storage (up to ~4.5 GB/s)
-- Processes mode scales well; threads cap at ~1.5 GB/s
-- Torch DataLoader flat at ~0.6 GB/s (bottlenecked elsewhere)
+- Zarr 2 processes clearly lead, peaking at ~1.5 GB/s with 2 workers and holding ~1.4 GB/s at higher counts
+- Zarr 3 processes reach ~1.1 GB/s but remain well below Zarr 2
+- Both threads modes are limited to ~0.9 GB/s, showing maybe a GIL contention at this larger resolution
+- Scaling is mostly flat beyond 2 workers for all modes
 
-### N320 Resolution - HPC Storage
+### N1280 Resolution
 
-![N320 HPC Results](n320-hpc.png)
+- N1280 testing is planned but has not yet been completed
 
-- Higher resolution shows similar patterns
-- Zarr 2 slightly outperforms Zarr 3 in torch mode
+## Conclusion
 
-### O1280 Resolution - HPC Storage
+Across all resolutions and access patterns, **Zarr 2 consistently outperforms Zarr 3** in raw read throughput. The gap is most striking in threaded mode, likely due to GIL contention differences. In process mode — which is what actually matters for parallel data loading — the difference is narrower, though Zarr 2 still holds a consistent advantage.
 
-![O1280 HPC Results](o1280-hpc.png)
+That said, read throughput is only one piece of the puzzle. Real-world training performance depends on many interacting factors: data pipeline overlap with computation, memory pressure, chunk layout, compression codec behaviour, filesystem caching, and network contention. A slower raw read speed does not necessarily translate into slower training if the I/O is adequately hidden behind GPU computation.
 
-- Very high resolution dataset, limited test runs
-- Zarr 2: ~1.1 GB/s, Zarr 3: ~0.8 GB/s
+**The only benchmark that truly matters is running actual training** and measuring end-to-end epoch time, GPU utilisation, and I/O wait. The synthetic results presented here are useful for spotting potential bottlenecks, but they should not be taken as definitive evidence that Zarr 3 will degrade training performance in practice.
 
-## Conclusions
-
-1. **Zarr 2 vs Zarr 3**: Generally comparable, Zarr 2 slightly better in some configurations
-2. **Parallelisation**: Multi-process scaling effective up to ~16 workers
-3. **Storage**: SSD provides 3-4x higher throughput than networked HPC storage
-4. **PyTorch DataLoader**: Additional overhead reduces throughput vs raw parallel reads
+Nonetheless, these results suggest that **further investigation is needed before upgrading safely to Zarr 3** in production training pipelines. A cautious approach — including full training benchmarks with representative model configurations — is recommended before any migration.

@@ -40,5 +40,4 @@ Other useful options: `-k` for substring filtering (e.g. `-k "S3 | SSD"`), `--to
 
 ## Requirements
 
-- Python 3.10+
 - [uv](https://github.com/astral-sh/uv) (dependencies are managed automatically via `uv run`)

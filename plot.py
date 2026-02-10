@@ -644,7 +644,7 @@ class ThroughputPlotter:
                                 subset["total_workers"],
                                 subset["throughput_gbps"],
                                 c=[colour],
-                                marker="o",
+                                marker=".",
                                 s=50,
                                 alpha=0.8,
                                 edgecolors="white",
@@ -887,8 +887,8 @@ class ThroughputPlotter:
 
         # Add separate legend for zarr line styles
         linestyle_handles = [
-            Line2D([0], [0], color=zarr_colour, linestyle="-", linewidth=2, label="Zarr 2"),
-            Line2D([0], [0], color=zarr_colour, linestyle="--", linewidth=2, label="Zarr 3"),
+            Line2D([0], [0], color="black", linestyle="-", linewidth=2, label="Zarr 2"),
+            Line2D([0], [0], color="black", linestyle="--", linewidth=2, label="Zarr 3"),
         ]
         self.fig.legend(
             handles=linestyle_handles,

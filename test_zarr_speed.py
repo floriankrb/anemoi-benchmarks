@@ -34,10 +34,9 @@ def _init_worker(path: str) -> None:
     Uses thread-local storage for threads, global for processes.
     """
     global _process_ds
-    from anemoi.datasets import open_dataset
-
-    ds = open_dataset(path)
-    # ds = zarr.open(path).data
+    # from anemoi.datasets import open_dataset
+    # ds = open_dataset(path)
+    ds = zarr.open(path)['data']
 
     # Store in both locations - thread-local for threads, global for processes
     _thread_local.ds = ds
@@ -130,9 +129,10 @@ def test_speed(
     print(f"Zarr version: {zarr.__version__}")
     print(f"Opening: {path}")
 
-    from anemoi.datasets import open_dataset
-    ds = open_dataset(path)
-    # ds = zarr.open(path).data
+    # from anemoi.datasets import open_dataset
+    # ds = open_dataset(path)
+
+    ds = zarr.open(path)['data']
 
     print(f"Dataset shape: {ds.shape}")
     n_times = ds.shape[0]
