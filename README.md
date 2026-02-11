@@ -7,6 +7,7 @@ Benchmarking read throughput of [anemoi-datasets](https://github.com/ecmwf/anemo
 The suite measures how fast data can be read from Zarr datasets using threads, processes, and PyTorch DataLoader (with DDP). It includes heat tracking to ensure benchmarks read cold (uncached) data.
 
 See [BENCHMARK.md](BENCHMARK.md) for detailed results and methodology.
+See [BENCHMARK_TORCH.md](BENCHMARK_TORCH.md) for more results using pytorch data loader.
 
 ## Datasets
 
@@ -20,6 +21,10 @@ The higher-resolution datasets (N320, O1280) used in some benchmarks are not yet
 
 ```bash
 ./run_test.sh <path-to-dataset.zarr> --mode threads --workers 1-2-4-8-16 -n 16
+```
+
+```bash
+./run_test.sh <path-to-dataset.zarr> --mode processes --workers 1-2-4-8-16 -n 16
 ```
 
 ```bash
