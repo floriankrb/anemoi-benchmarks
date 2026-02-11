@@ -43,6 +43,14 @@ Use `plot.py` to visualise results. It reads the JSONL logs and produces PNG plo
 
 Other useful options: `-k` for substring filtering (e.g. `-k "S3 | SSD"`), `--torch-only`, `--no-torch`.
 
+## Simple benchmark
+
+Additionally some simple benchmark tools can be found in simple_benchmark/*, no datasets needed.
+
+```bash
+ ./simple_benchmark/run.sh --path /path/to/directory --chunk-size 1GB
+```
+
 ## Requirements
 
 - [uv](https://github.com/astral-sh/uv) (dependencies are managed automatically via `uv run`)
