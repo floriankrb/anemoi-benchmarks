@@ -35,18 +35,19 @@ The true performance metrics come from full training benchmarks, which look at d
 ![O96 SSD Threads vs Processes](o96-ssd-threads-processes.png)
 
 - Zarr 2 threads scale best, reaching ~1.5 GB/s at 8–16 workers
-- Zarr 2 processes reach ~1.4 GB/s at 8 workers, slightly below threads
-- Zarr 3 plateaus at ~1.2 GB/s for both threads and processes, showing no benefit from additional workers beyond 2
-- At 1 worker, Zarr 3 starts slightly ahead of Zarr 2 processes (~1.0 vs ~0.75 GB/s), but Zarr 2 overtakes as workers increase
+- Zarr 2 processes reach ~1.5 GB/s at 8 workers, then drop slightly to ~1.35 GB/s at 16
+- Zarr 3 plateaus at ~1.2 GB/s for both threads and processes, showing no benefit from additional workers beyond 2; Zarr 3 threads dips slightly to ~1.15 GB/s at 16
+- At 1 worker, Zarr 3 starts ahead of Zarr 2 processes (~1.0 vs ~0.75 GB/s), but Zarr 2 overtakes as workers increase
 
 ### N320 — Threads vs Processes (SSD)
 
 ![N320 SSD Threads vs Processes](n320-ssd-threads-processes.png)
 
-- Zarr 2 processes clearly lead, peaking at ~1.5 GB/s with 2 workers and holding ~1.4 GB/s at higher counts
-- Zarr 3 processes reach ~1.1 GB/s but remain well below Zarr 2
-- Both threads modes are limited to ~0.9 GB/s, showing maybe a GIL contention at this larger resolution
-- Scaling is mostly flat beyond 2 workers for all modes
+- Zarr 2 processes lead at low worker counts, starting at ~1.2 GB/s with 1 worker and peaking at ~1.5 GB/s with 2 workers, then settling at ~1.35–1.4 GB/s
+- Zarr 2 threads starts lower (~0.95 GB/s at 1 worker) but scales up to ~1.35–1.4 GB/s at 4+ workers, converging with Zarr 2 processes
+- Zarr 3 processes reach ~1.1 GB/s and plateau
+- Zarr 3 threads stays flat at ~0.9 GB/s, suggesting GIL contention affects Zarr 3 specifically at this larger resolution
+- Scaling is mostly flat beyond 2–4 workers for all modes
 
 ### N1280 Resolution
 
@@ -54,7 +55,7 @@ The true performance metrics come from full training benchmarks, which look at d
 
 ## Conclusion
 
-Across all resolutions and access patterns, **Zarr 2 consistently outperforms Zarr 3** in raw read throughput. The gap is most striking in threaded mode, likely due to GIL contention differences. In process mode — which is what actually matters for parallel data loading — the difference is narrower, though Zarr 2 still holds a consistent advantage.
+Across all resolutions and access patterns, **Zarr 2 consistently outperforms Zarr 3** in raw read throughput. Both Zarr 2 threads and processes scale well, reaching ~1.4–1.5 GB/s. Zarr 3, by contrast, plateaus earlier and lower (~1.1–1.2 GB/s), with Zarr 3 threads particularly affected at N320 resolution (~0.9 GB/s), suggesting GIL contention specific to Zarr 3's implementation.
 
 That said, read throughput is only one piece of the puzzle. Real-world training performance depends on many interacting factors: data pipeline overlap with computation, memory pressure, chunk layout, compression codec behaviour, filesystem caching, and network contention. A slower raw read speed does not necessarily translate into slower training if the I/O is adequately hidden behind GPU computation.
 
