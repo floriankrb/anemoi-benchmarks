@@ -35,3 +35,8 @@ These results are indicative and should be interpreted with caution, as the obse
 ---
 
 For threads/processes and more detailed breakdowns, see BENCHMARK.md.
+
+## Next steps
+
+- Experiment with tweaking the zarr 3 config (set number of thread inside zarr to 1, other).
+- Experiment with zarrs in Rust.
